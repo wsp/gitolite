@@ -195,7 +195,7 @@ sub list_phy_repos
     my @phy_repos;
 
     wrap_chdir($REPO_BASE);
-    for my $repo (`find . -type d -name "*.git" -prune`) {
+    for my $repo (`find -L . -type d -name "*.git" -prune`) {
         chomp ($repo);
         $repo =~ s(\./(.*)\.git$)($1);
         push @phy_repos, $repo;
@@ -247,13 +247,19 @@ sub check_ref {
 # NOTE: this sub will change your cwd; caller beware!
 sub new_repo
 {
-    my ($repo, $hooks_dir, $creator) = @_;
+    my ($repo, $hooks_dir, $creator, $realpath) = @_;
 
     umask($REPO_UMASK);
     die "wildrepos disabled, can't set creator $creator on new repo $repo\n"
         if $creator and not $GL_WILDREPOS;
 
-    system("mkdir", "-p", "$repo.git") and die "$ABRT mkdir $repo.git failed: $!\n";
+    if ("$realpath" ne "") {
+       system("mkdir", "-p", "$realpath") and die "$ABRT mkdir $realpath failed: $!\n";
+       symlink "$realpath", "$repo.git";
+    }
+    else {
+       system("mkdir", "-p", "$repo.git") and die "$ABRT mkdir $repo.git failed: $!\n";
+    }
         # erm, note that's "and die" not "or die" as is normal in perl
     wrap_chdir("$repo.git");
     system("git --bare init >&2");
@@ -640,7 +646,7 @@ sub expand_wild
 
     chdir($REPO_BASE) or die "chdir $REPO_BASE failed: $!\n";
     my $count = 0;
-    for my $actual_repo (`find . -type d -name "*.git" -prune|sort`) {
+    for my $actual_repo (`find -L . -type d -name "*.git" -prune|sort`) {
         chomp ($actual_repo);
         $actual_repo =~ s/^\.\///;
         $actual_repo =~ s/\.git$//;

@@ -71,6 +71,20 @@ my %owner = ();
 # backward compat for delegation
 my $subconf_seen = 0;
 
+# %symlinks contains keys representing symlinks to be
+# created in $REPO_BASE
+#
+# the corresponding value of each key represents the
+# target of the symlink
+#
+# symlinks ending in ".git" point directly to a
+# git repository whereas all others point
+# to directories
+#
+# symlinks are created directly in $REPO_BASE; symlinks
+# at arbitrarily deep levels are not supported
+my %symlinks = ();
+
 # ----------------------------------------------------------------------------
 #       subroutines
 # ----------------------------------------------------------------------------
@@ -295,6 +309,16 @@ sub parse_conf_line
         $desc{"$repo.git"} = $desc;
         $owner{"$repo.git"} = $owner || '';
     }
+    # support for symlinks in $REPO_BASE; one of:
+    #     symlink "/path/to/dir"
+    #     symlink "/path/to/repo.git"
+    elsif ($line =~ /^symlink "(.+)"/)
+    {
+        my $symlink = `basename $1`;
+        my $target  = $1;
+        chomp($symlink, $target);
+        $symlinks{"$symlink"} = "$target";
+    }
     else
     {
         die "$ABRT can't make head or tail of '$line'\n";
@@ -408,12 +432,69 @@ die "\n\t\t***** AAARGH! *****\n" .
 # doc/big-config.mkd for details.
 # ----------------------------------------------------------------------------
 
+# process the symlinks.
+do_symlinks();
+
 # process the normal repos in %repos.  This includes creating them if needed
 # (and GL_NO_CREATE_REPOS is not set), checking hooks, and finally, if
 # GL_BIG_CONFIG is set, writing out the one-repo config file for directly
 # specified repos (i.e., "repo foo", not "@grp = foo" + "repo @grp")
 do_normal_repos();
 write_compiled_conf();    # write out the final compiled config
+
+# ----------------------------------------------------------------------------
+#       process the symlinks that point to directories
+# ----------------------------------------------------------------------------
+
+sub do_symlinks
+{
+    wrap_chdir($REPO_BASE);
+
+    for my $symlink (keys %symlinks) {
+
+        # skip git repos;
+        # these will be handled
+        # at repo creation time
+        # by sub new_repo
+        next if ($symlink =~ /\.git$/);
+
+        # get the target of the symlink
+        my $target = $symlinks{$symlink};
+
+        # symlink creation
+        if (-e $symlink) { # does something already exist with the same name?
+            if (! -l $symlink) { # is it a symlink?
+                die "$ABRT '$symlink' already exists and is not a symlink\n";
+            }
+            else {
+                my $current_target = readlink($symlink);
+                if ($current_target ne $target) { # unlink and recreate the symlink
+                                                  # if it doesn't point to $target
+                    print STDERR "$WARN re-creating symlink '$symlink'\n";
+                    print STDERR "$WARN previous target: '$current_target'\n";
+                    print STDERR "$WARN new target: '$target'\n";
+                    unlink $symlink;
+                    symlink $target, $symlink;
+                }
+            }
+        }
+        else { # the target doesn't exist; create it
+            symlink $target, $symlink;
+        }
+
+        # symlink target creation
+        if (-e $target) { # does the target already exist?
+            if(! -d $target) { # is it a directory?
+                # unlink the symlink created above since we couldn't create its target
+                unlink $symlink;
+                die "$ABRT symlink target '$target' already exists and is not a directory\n";
+            }
+        }
+        else {
+            system("mkdir", "-p", "$target") and die "$ABRT mkdir $target failed: $!\n";
+        }
+    }
+}
 
 # ----------------------------------------------------------------------------
 #       process the normal repos in %repos (create, hook, one_repo config...)
@@ -430,6 +511,8 @@ sub do_normal_repos
     # weed out duplicates (the code in the loop below is disk activity!)
     my %seen = map { $_ => 1 } @repos;
     @repos = sort keys %seen;
+    # real path for symlinked repos
+    my $realpath = "";
 
     for my $repo (sort @repos) {
         next unless $repo =~ $REPONAME_PATT;    # skip repo patterns
@@ -438,7 +521,14 @@ sub do_normal_repos
         unless ($GL_NO_CREATE_REPOS) {
             unless (-d "$repo.git") {
                 print STDERR "creating $repo...\n";
-                new_repo($repo, "$GL_ADMINDIR/hooks/common");
+                # create a linked repo if necessary
+                if (exists $symlinks{"$repo.git"}) {
+                    $realpath = $symlinks{"$repo.git"};
+                }
+                else {
+                    $realpath = "";
+                }
+                new_repo($repo, "$GL_ADMINDIR/hooks/common", "", $realpath);
                 # new_repo would have chdir'd us away; come back
                 wrap_chdir($REPO_BASE);
             }

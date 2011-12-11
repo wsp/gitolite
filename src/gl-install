@@ -90,7 +90,7 @@ EOF
 
 # finally, hooks must be propagated to all the repos in case they changed
 chdir($REPO_BASE) or die "chdir $REPO_BASE failed: $!\n";
-for my $repo (`find . -type d -name "*.git" -prune`) {
+for my $repo (`find -L . -type d -name "*.git" -prune`) {
     chomp ($repo);
     # propagate our own, plus any local admin-defined, hooks
     ln_sf("$GL_ADMINDIR/hooks/common", "*", "$repo/hooks");
